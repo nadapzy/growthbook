@@ -35,8 +35,7 @@ import {
 type AggregatedFactTableRestateLogReason =
   | "forced"
   | "no-existing-table"
-  | "incomplete-write"
-  | "schema-drift"
+  | Exclude<AggregatedFactTableRestateReason, null>
   | null;
 
 function resolveAggregatedFactTableRestateLogReason({
@@ -244,6 +243,7 @@ export function buildAggregatedFactTableStatus({
           registry: doc,
           factTableSettingsHash,
           metricState,
+          now: new Date(),
         })
       : null;
 
@@ -408,6 +408,7 @@ export async function runAggregatedFactTableUpdate(
     registry,
     factTableSettingsHash,
     metricState,
+    now: new Date(),
   });
   const mode: AggregatedFactTableRunMode =
     forceRestate || !registry.tableFullName || restateReason !== null

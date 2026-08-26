@@ -477,6 +477,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
     endDate: new Date("2024-01-31"),
     variations: [],
   };
+  const incrementalRefreshStartTime = new Date("2024-02-15T00:00:00Z");
 
   beforeEach(() => {
     // @ts-expect-error -- context not needed for this unit test; exposure list
@@ -517,11 +518,57 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
       unitsSourceTableFullName: "proj.ds.units",
       metrics: [eventQuantileMetric],
       lastMaxTimestamp: null,
+      incrementalRefreshStartTime,
     });
     // Partial aggregation builds the sketch
     expect(sql).toContain("KLL_QUANTILES.INIT_FLOAT64");
     // Companion count emitted alongside the sketch
     expect(sql).toMatch(/COUNT\([^)]+\)\s+AS\s+\w+_n_events/);
+  });
+
+  // The metric scan's natural upper bound is endDate + the longest conversion
+  // window, which is in the future for a running experiment; it must be capped
+  // at the refresh start so a future-dated row can't advance the watermark.
+  it("getInsertMetricSourceDataQuery caps the fact table scan at the refresh start", () => {
+    const conversionMetric = factMetricFactory.build({
+      id: "fact_conv",
+      metricType: "proportion",
+      numerator: { factTableId: "ft_events", column: "$$distinctUsers" },
+      windowSettings: {
+        type: "conversion",
+        delayValue: 0,
+        delayUnit: "hours",
+        windowValue: 168,
+        windowUnit: "hours",
+      },
+    });
+    const buildSql = (s: ExperimentSnapshotSettings) =>
+      integration.getInsertMetricSourceDataQuery({
+        settings: s,
+        exposureQuery: resolvedExposureQuery,
+        activationMetric: null,
+        factTableMap,
+        factTableId: "ft_events",
+        metricSourceTableFullName: "proj.ds.metric_source",
+        unitsSourceTableFullName: "proj.ds.units",
+        metrics: [conversionMetric],
+        lastMaxTimestamp: new Date("2024-02-14T00:00:00Z"),
+        incrementalRefreshStartTime,
+      });
+
+    // Running: endDate (== refresh start, 02-15) + 168h = 02-22 is capped to 02-15.
+    const running = buildSql({
+      ...settings,
+      endDate: incrementalRefreshStartTime,
+    });
+    expect(running).toMatch(/m\.timestamp\s*<=\s*'2024-02-15 00:00:00'/);
+    expect(running).not.toContain("2024-02-22");
+    expect(running).toMatch(/m\.timestamp\s*>\s*'2024-02-14 00:00:00\.000'/);
+
+    // Stopped 01-31: endDate + 168h = 02-07 is already before the refresh start.
+    const stopped = buildSql(settings);
+    expect(stopped).toMatch(/m\.timestamp\s*<=\s*'2024-02-07 00:00:00'/);
+    expect(stopped).not.toContain("2024-02-15");
   });
 
   it("getInsertMetricSourceDataQuery emits KLL MERGE_PARTIAL (not INIT) for 'kll merge' columns", () => {
@@ -545,6 +592,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
       unitsSourceTableFullName: "proj.ds.units",
       metrics: [prebuiltSketchMetric],
       lastMaxTimestamp: null,
+      incrementalRefreshStartTime,
     });
     // Partial aggregation merges the pre-built sketch; must not INIT.
     expect(sql).toContain("KLL_QUANTILES.MERGE_PARTIAL");
@@ -572,6 +620,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
       unitsSourceTableFullName: "proj.ds.units",
       metrics: [prebuiltSketchMetric],
       lastMaxTimestamp: null,
+      incrementalRefreshStartTime,
     });
     // The paired count column must be projected from the source fact table
     // and SUM-aggregated for n_events. COUNT(<col>_value) would be wrong:
@@ -612,6 +661,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
       unitsSourceTableFullName: "proj.ds.units",
       metrics: [overrideMetric],
       lastMaxTimestamp: null,
+      incrementalRefreshStartTime,
     });
     // Override column is projected as the n_events source.
     expect(sql).toContain("rollup_event_count");
@@ -829,6 +879,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
         unitsSourceTableFullName: "proj.ds.units",
         metrics: [crossFtMetric],
         lastMaxTimestamp: null,
+        incrementalRefreshStartTime,
       });
       // Only the numerator `_value` column appears in the SELECT projection.
       expect(sql).toMatch(/fact_xft_ratio_value\b/);
@@ -846,6 +897,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
         unitsSourceTableFullName: "proj.ds.units",
         metrics: [crossFtMetric],
         lastMaxTimestamp: null,
+        incrementalRefreshStartTime,
       });
       // Only the denominator column appears in the SELECT projection.
       expect(sql).toMatch(/fact_xft_ratio_denominator_value\b/);
@@ -1318,6 +1370,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
         unitsSourceTableFullName: "proj.ds.units",
         metrics: [ratioAB, ratioAC],
         lastMaxTimestamp: null,
+        incrementalRefreshStartTime,
       });
       expect(hubInsertSql).toMatch(/fact_ratio_a_b_value\b/);
       expect(hubInsertSql).toMatch(/fact_ratio_a_c_value\b/);
@@ -1361,6 +1414,7 @@ describe("BigQuery KLL incremental refresh SQL generation (E2E)", () => {
         unitsSourceTableFullName: "proj.ds.units",
         metrics: [ratioAB, ratioAC],
         lastMaxTimestamp: null,
+        incrementalRefreshStartTime,
       });
       // FT_subscriptions hosts the denominator of ratioAB only.
       expect(subsInsertSql).toMatch(/fact_ratio_a_b_denominator_value\b/);

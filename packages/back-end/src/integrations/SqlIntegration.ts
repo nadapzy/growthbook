@@ -1,6 +1,6 @@
 import { getValidDate } from "shared/dates";
 import { parseIntWithDefault } from "shared/util";
-import { format as formatDate, subDays } from "date-fns";
+import { format as formatDate, min as minDate, subDays } from "date-fns";
 import {
   ExperimentMetricInterface,
   getFactTableTemplateVariables,
@@ -1663,7 +1663,11 @@ export default abstract class SqlIntegration
 
     // TODO(incremental-refresh): What if "skip partial data" is true?
     // Does the conversionWindowsHour need to be set different?
-    const endDate = getExperimentEndDate(settings, 0);
+    const endDate = minDate([
+      getExperimentEndDate(settings, 0),
+      // Cap at refresh start; see incrementalRefreshStartTime.
+      params.incrementalRefreshStartTime,
+    ]);
 
     return format(
       `
@@ -2158,7 +2162,13 @@ export default abstract class SqlIntegration
           })),
           factTable: source.factTable,
           startDate: source.metricStart,
-          endDate: source.metricEnd,
+          // `metricEnd` is endDate + the longest conversion window, i.e. in
+          // the future for a running experiment. Cap at refresh start; see
+          // incrementalRefreshStartTime.
+          endDate: minDate([
+            source.metricEnd,
+            params.incrementalRefreshStartTime,
+          ]),
           experimentId: params.settings.experimentId,
           phase: params.settings.phase,
           customFields: params.settings.customFields,

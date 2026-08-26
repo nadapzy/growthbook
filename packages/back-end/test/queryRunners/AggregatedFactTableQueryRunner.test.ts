@@ -24,30 +24,31 @@ describe("getRestateChunkBounds", () => {
     }
     // Each closed chunk is exactly chunkDays wide.
     for (let i = 0; i < chunks.length - 1; i++) {
-      expect(chunks[i].end!.getTime() - chunks[i].start.getTime()).toBe(
+      expect(chunks[i].end.getTime() - chunks[i].start.getTime()).toBe(
         2 * 24 * 60 * 60 * 1000,
       );
     }
-    // Final chunk is open-ended so events arriving between planning and
-    // execution aren't dropped.
-    expect(chunks[6].end).toBeNull();
+    // Final chunk ends at `now` so a future-dated source row can't push the
+    // watermark past the run's start time; later arrivals are picked up by
+    // the next incremental run.
+    expect(chunks[6].end).toEqual(now);
     expect(chunks[6].start).toEqual(new Date("2024-01-13T00:00:00Z"));
   });
 
-  it("leaves the final chunk open when the window doesn't divide evenly", () => {
+  it("ends the final chunk at now when the window doesn't divide evenly", () => {
     const now = new Date("2024-01-15T12:00:00Z");
     const windowStart = new Date("2024-01-01T00:00:00Z");
     const chunks = getRestateChunkBounds(windowStart, now, 3);
     expect(chunks.length).toBe(5);
     expect(chunks[4].start).toEqual(new Date("2024-01-13T00:00:00Z"));
-    expect(chunks[4].end).toBeNull();
+    expect(chunks[4].end).toEqual(now);
   });
 
-  it("emits at least one open chunk for degenerate windows", () => {
+  it("emits at least one chunk for degenerate windows", () => {
     const now = new Date("2024-01-01T00:00:00Z");
     const chunks = getRestateChunkBounds(now, now, 2);
     expect(chunks.length).toBe(1);
-    expect(chunks[0].end).toBeNull();
+    expect(chunks[0].end).toEqual(now);
   });
 
   it("snaps internal seams to UTC midnight so a mid-day window never splits a day", () => {
@@ -62,20 +63,18 @@ describe("getRestateChunkBounds", () => {
     for (let i = 0; i < chunks.length - 1; i++) {
       // Internal seam lands on a UTC day boundary, so no event_date
       // (= DATE(timestamp), UTC) can straddle two chunks.
-      expect(chunks[i].end!.getTime() % DAY).toBe(0);
+      expect(chunks[i].end.getTime() % DAY).toBe(0);
       // Contiguous: each end === next start, no gap/overlap.
       expect(chunks[i + 1].start).toEqual(chunks[i].end);
     }
 
-    // Interior chunks (everything but the short leading and open trailing one)
+    // Interior chunks (everything but the short leading and trailing ones)
     // are exactly chunkDays wide.
     for (let i = 1; i < chunks.length - 1; i++) {
-      expect(chunks[i].end!.getTime() - chunks[i].start.getTime()).toBe(
-        2 * DAY,
-      );
+      expect(chunks[i].end.getTime() - chunks[i].start.getTime()).toBe(2 * DAY);
     }
 
-    expect(chunks[chunks.length - 1].end).toBeNull();
+    expect(chunks[chunks.length - 1].end).toEqual(now);
   });
 });
 

@@ -775,7 +775,7 @@ export const apiAggregatedFactTableValidator = namedSchema(
           "Whether the next run will be forced to drop and rebuild the table instead of appending incrementally",
         ),
       pendingRestateReason: z
-        .enum(["incomplete-write", "schema-drift"])
+        .enum(["incomplete-write", "schema-drift", "watermark-in-future"])
         .nullable()
         .describe("Why a restate is pending, if `pendingRestate` is true"),
     })

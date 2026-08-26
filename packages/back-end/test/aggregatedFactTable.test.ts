@@ -732,6 +732,8 @@ describe("detectAggregatedFactTableSchemaDrift", () => {
   });
 });
 
+const NOW = new Date("2024-06-01T00:00:00Z");
+
 describe("getAggregatedFactTableRestateReason", () => {
   const factTable = factTableFactory.build({
     id: FT_ID,
@@ -766,9 +768,11 @@ describe("getAggregatedFactTableRestateReason", () => {
           factTableSettingsHash: consistent.factTableSettingsHash,
           metricState: consistent.metricState,
           inFlightExecutionId: "aftexec_1",
+          lastMaxTimestamp: null,
         },
         factTableSettingsHash: consistent.factTableSettingsHash,
         metricState: consistent.metricState,
+        now: NOW,
       }),
     ).toBe("incomplete-write");
   });
@@ -781,10 +785,12 @@ describe("getAggregatedFactTableRestateReason", () => {
           factTableSettingsHash: consistent.factTableSettingsHash,
           metricState: consistent.metricState,
           inFlightExecutionId: "aftexec_1",
+          lastMaxTimestamp: null,
         },
         // a drifting current schema, but the marker takes precedence
         factTableSettingsHash: drifted.factTableSettingsHash,
         metricState: drifted.metricState,
+        now: NOW,
       }),
     ).toBe("incomplete-write");
   });
@@ -797,9 +803,11 @@ describe("getAggregatedFactTableRestateReason", () => {
           factTableSettingsHash: consistent.factTableSettingsHash,
           metricState: consistent.metricState,
           inFlightExecutionId: null,
+          lastMaxTimestamp: null,
         },
         factTableSettingsHash: drifted.factTableSettingsHash,
         metricState: drifted.metricState,
+        now: NOW,
       }),
     ).toBe("schema-drift");
   });
@@ -812,11 +820,30 @@ describe("getAggregatedFactTableRestateReason", () => {
           factTableSettingsHash: consistent.factTableSettingsHash,
           metricState: consistent.metricState,
           inFlightExecutionId: null,
+          lastMaxTimestamp: null,
         },
         factTableSettingsHash: consistent.factTableSettingsHash,
         metricState: consistent.metricState,
+        now: NOW,
       }),
     ).toBeNull();
+  });
+
+  it("returns watermark-in-future when the stored watermark is ahead of now", () => {
+    expect(
+      getAggregatedFactTableRestateReason({
+        registry: {
+          tableFullName: "t",
+          factTableSettingsHash: consistent.factTableSettingsHash,
+          metricState: consistent.metricState,
+          inFlightExecutionId: null,
+          lastMaxTimestamp: new Date("2024-06-03T00:00:00Z"),
+        },
+        factTableSettingsHash: consistent.factTableSettingsHash,
+        metricState: consistent.metricState,
+        now: NOW,
+      }),
+    ).toBe("watermark-in-future");
   });
 
   it("returns null when the table has never been materialized", () => {
@@ -829,9 +856,11 @@ describe("getAggregatedFactTableRestateReason", () => {
           // even with a marker set, a never-materialized table is the caller's
           // first-run case, not an incomplete write.
           inFlightExecutionId: "aftexec_1",
+          lastMaxTimestamp: null,
         },
         factTableSettingsHash: drifted.factTableSettingsHash,
         metricState: drifted.metricState,
+        now: NOW,
       }),
     ).toBeNull();
   });

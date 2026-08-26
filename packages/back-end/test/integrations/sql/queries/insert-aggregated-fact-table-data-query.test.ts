@@ -32,7 +32,7 @@ describe("getInsertAggregatedFactTableDataQuery", () => {
     metrics: [sumMetric, countMetric],
     tableFullName: "`proj.dataset.gb_aggregated_ft_target_user_id`",
     windowStartDate: new Date("2024-01-01T00:00:00Z"),
-    windowEndDate: null,
+    windowEndDate: new Date("2024-02-01T00:00:00Z"),
     exclusiveStart: false,
   };
 
@@ -55,19 +55,12 @@ describe("getInsertAggregatedFactTableDataQuery", () => {
   });
 
   it("threads windowEndDate as an exclusive upper bound on the source scan", () => {
-    const sql = getInsertAggregatedFactTableDataQuery(bigQueryDialect, {
-      ...baseParams,
-      windowEndDate: new Date("2024-01-03T00:00:00Z"),
-    });
-    // Half-open chunk: timestamp >= start AND timestamp < end.
-    expect(sql).toMatch(/m\.timestamp\s*>=/);
-    expect(sql).toMatch(/m\.timestamp\s*</);
-    expect(sql).toContain("2024-01-03");
-    // Open-ended chunk: no upper bound.
-    const open = getInsertAggregatedFactTableDataQuery(
+    const sql = getInsertAggregatedFactTableDataQuery(
       bigQueryDialect,
       baseParams,
     );
-    expect(open).not.toMatch(/m\.timestamp\s*</);
+    // Half-open: timestamp >= start AND timestamp < end.
+    expect(sql).toMatch(/m\.timestamp\s*>=/);
+    expect(sql).toMatch(/m\.timestamp\s*<\s*'2024-02-01 00:00:00\.000'/);
   });
 });

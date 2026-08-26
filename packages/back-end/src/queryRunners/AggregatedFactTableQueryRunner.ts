@@ -9,6 +9,7 @@ import {
   FactMetricInterface,
   FactTableInterface,
 } from "shared/types/fact-table";
+import { min as minDate } from "date-fns";
 import { snapToUtcDayStart } from "shared/dates";
 import { AggregatedFactTableKey } from "back-end/src/models/AggregatedFactTableModel";
 import { QueryRunner, QueryMap } from "./QueryRunner";
@@ -18,28 +19,28 @@ export const AGGREGATED_FACT_TABLE_PREFIX = "gb_aggregated";
 // Slice the restate window into half-open [start, end) chunks ~chunkDays wide
 // so each chunk's INSERT fits the engine's per-stage write budget. Internal
 // seams snap to UTC midnight so an event_date (= DATE(timestamp), UTC) never
-// spans two chunks. Final chunk is open-ended so late events aren't dropped;
-// chunks tile the window with no overlap or gap.
+// spans two chunks; chunks tile [windowStart, now) with no overlap or gap.
+// The final chunk ends at `now` rather than being open-ended so a future-dated
+// source row can't advance the watermark past the run's start (see
+// InsertAggregatedFactTableDataQueryParams.windowEndDate); rows that land
+// between planning and execution are picked up by the next incremental run.
 export function getRestateChunkBounds(
   windowStart: Date,
   now: Date,
   chunkDays: number,
-): Array<{ start: Date; end: Date | null }> {
+): Array<{ start: Date; end: Date }> {
   const chunkMs = chunkDays * 24 * 60 * 60 * 1000;
-  const chunks: Array<{ start: Date; end: Date | null }> = [];
+  const chunks: Array<{ start: Date; end: Date }> = [];
   let cursor = windowStart;
   while (cursor.getTime() < now.getTime()) {
     // snapToUtcDayStart(cursor + chunkMs) is always > cursor for chunkDays >= 1.
     const next = snapToUtcDayStart(new Date(cursor.getTime() + chunkMs));
-    chunks.push({
-      start: cursor,
-      end: next.getTime() >= now.getTime() ? null : next,
-    });
+    chunks.push({ start: cursor, end: minDate([next, now]) });
     cursor = next;
   }
-  // Degenerate windows (windowStart >= now) still emit one open-ended chunk.
+  // Degenerate windows (windowStart >= now) still emit one chunk.
   if (chunks.length === 0) {
-    chunks.push({ start: windowStart, end: null });
+    chunks.push({ start: windowStart, end: now });
   }
   return chunks;
 }
@@ -351,7 +352,7 @@ export class AggregatedFactTableQueryRunner extends QueryRunner<
     const chunks =
       mode === "restate" && restateChunkDays
         ? getRestateChunkBounds(restateWindowStart, now, restateChunkDays)
-        : [{ start: windowStartDate, end: null }];
+        : [{ start: windowStartDate, end: now }];
     const chunked = chunks.length > 1;
 
     let lastInsertQuery: QueryPointer | null = null;

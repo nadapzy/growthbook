@@ -58424,6 +58424,7 @@ components:
               enum:
                 - incomplete-write
                 - schema-drift
+                - watermark-in-future
             - type: 'null'
       required:
         - idType

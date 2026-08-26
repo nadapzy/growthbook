@@ -219,6 +219,8 @@ import {
   legacyDocDescribesPhase,
   assertIncrementalRefreshPrerequisites,
   exploratoryOverallRequiresFullRefresh,
+  isWatermarkInFuture,
+  WATERMARK_IN_FUTURE_REASON,
 } from "back-end/src/enterprise/services/data-pipeline";
 import {
   ExperimentUpdateLogPlan,
@@ -1429,10 +1431,12 @@ function getSnapshotQueryRunnerKind({
  * - There is no prior incremental state for this experiment.
  * - The state document exists but has no `unitsTableFullName`, meaning
  *   the warehouse units table was never created (e.g., the initial attempt failed).
+ * - The stored units watermark is in the future (see isWatermarkInFuture).
  */
-function resolveFullRefresh(
+export function resolveFullRefresh(
   useCache: boolean,
   incrementalRefreshModel: IncrementalRefreshInterface | null,
+  now: Date,
 ): { fullRefresh: boolean; fullRefreshReason: string | null } {
   if (!useCache) {
     return {
@@ -1454,6 +1458,13 @@ function resolveFullRefresh(
       fullRefresh: true,
       fullRefreshReason: "Units table was never materialized by a prior run.",
     };
+  }
+
+  if (isWatermarkInFuture(incrementalRefreshModel.unitsMaxTimestamp, now)) {
+    logger.warn(
+      `Incremental refresh for ${incrementalRefreshModel.experimentId} has a units watermark in the future (${incrementalRefreshModel.unitsMaxTimestamp?.toISOString()}); forcing a full refresh.`,
+    );
+    return { fullRefresh: true, fullRefreshReason: WATERMARK_IN_FUTURE_REASON };
   }
 
   return { fullRefresh: false, fullRefreshReason: null };
@@ -1868,7 +1879,7 @@ export async function planSnapshot({
   const {
     fullRefresh: standardFullRefresh,
     fullRefreshReason: standardFullRefreshReason,
-  } = resolveFullRefresh(useCache, incrementalRefreshModel);
+  } = resolveFullRefresh(useCache, incrementalRefreshModel, new Date());
   const fullRefresh = type === "standard" ? standardFullRefresh : false;
   const fullRefreshReason =
     type === "standard" ? standardFullRefreshReason : null;

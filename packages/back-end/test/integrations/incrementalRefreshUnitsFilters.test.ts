@@ -147,4 +147,19 @@ describe("incremental refresh units query segment and query filter", () => {
       /FROM\s+__newExposures e\s+WHERE\s+e\.experiment_id = 'exp_1'/,
     );
   });
+
+  // buildSql runs with incrementalRefreshStartTime 2024-01-15 and a phase end
+  // date of 2024-02-01.
+  it("caps new exposures at the refresh start when the phase end date is later", () => {
+    const cte = newExposuresCte(buildSql(baseSettings, null));
+    expect(cte).toMatch(/e\.timestamp\s*<=\s*'2024-01-15 00:00:00\.000'/);
+    expect(cte).not.toContain("2024-02-01");
+  });
+
+  it("keeps the phase end date when it is before the refresh start", () => {
+    const cte = newExposuresCte(
+      buildSql({ ...baseSettings, endDate: new Date("2024-01-10") }, null),
+    );
+    expect(cte).toMatch(/e\.timestamp\s*<=\s*'2024-01-10 00:00:00\.000'/);
+  });
 });

@@ -34,6 +34,29 @@ import { getColumnsForMetric } from "back-end/src/integrations/sql/fact-metrics/
 import { getQueryableMetricsFromSnapshotSettings } from "back-end/src/services/experimentQueries/experimentQueries";
 import type { MetricFanOut } from "back-end/src/services/experimentQueries/planMetricFanOut";
 
+// Incremental caches persist MAX(timestamp) of the rows they last scanned and
+// only read rows strictly after it on the next run. Scans are capped at the
+// run's start time (see incrementalRefreshStartTime), so a stored watermark
+// ahead of the app-server clock can only come from a cache built before that
+// cap existed (or by a path that forgot it) ingesting a future-dated source
+// row. Such a cache is frozen -- every run scans an empty (watermark, now]
+// window -- and has already skipped the real rows stamped before the
+// watermark, so the only safe recovery is a from-scratch rebuild. The
+// tolerance absorbs clock jitter between app-server instances.
+const WATERMARK_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+export const WATERMARK_IN_FUTURE_REASON =
+  "Stored incremental watermark is ahead of the current time (a future-dated source row was ingested); rebuilding from scratch.";
+
+export function isWatermarkInFuture(
+  watermark: Date | null | undefined,
+  now: Date,
+): boolean {
+  return (
+    !!watermark &&
+    watermark.getTime() > now.getTime() + WATERMARK_FUTURE_TOLERANCE_MS
+  );
+}
+
 /**
  * Preconditions for running the incremental refresh query runner on a snapshot.
  * Throws when incremental refresh is unsupported for this configuration, or when
@@ -249,6 +272,8 @@ export function getMetricSettingsHashForIncrementalRefresh({
  *   - A metric still maps to it but its `settingsHash` changed — the cache's
  *     schema/values are out of shape with the metric's new configuration
  *     (conversion window, column refs, fact-table SQL/filters, CUPED days, …).
+ *   - Its stored `maxTimestamp` watermark is in the future (see
+ *     isWatermarkInFuture) — the cache is frozen and missing rows.
  *
  * The settings-hash case is what lets a changed metric recover incrementally:
  * only that metric's fact-table cache is rebuilt, while the units table and
@@ -262,13 +287,21 @@ export function getFactTablesNeedingRebuild({
   existingMetricSources,
   desiredFanOut,
   currentMetricSettingsHashes,
+  now,
 }: {
   existingMetricSources: IncrementalRefreshInterface["metricSources"];
   desiredFanOut: MetricFanOut;
   currentMetricSettingsHashes: Map<string, string>;
+  now: Date;
 }): Set<string> {
   const factTablesToRebuild = new Set<string>();
   if (!existingMetricSources.length) return factTablesToRebuild;
+
+  existingMetricSources.forEach((source) => {
+    if (isWatermarkInFuture(source.maxTimestamp, now)) {
+      factTablesToRebuild.add(source.factTableId);
+    }
+  });
 
   // (factTableId, metricId) tuples the persisted caches currently hold.
   const storedTuples = new Set<string>();
@@ -472,7 +505,11 @@ export function detectAggregatedFactTableSchemaDrift({
 export type AggregatedFactTableRestateReason =
   // A prior run appended but never durably advanced the watermark, so the
   // table may contain rows the watermark doesn't account for.
-  "incomplete-write" | "schema-drift" | null;
+  | "incomplete-write"
+  | "schema-drift"
+  // See isWatermarkInFuture.
+  | "watermark-in-future"
+  | null;
 
 // The single predicate the driver and the status UI both use to decide whether
 // an already-materialized table needs to be rebuilt rather than incrementally
@@ -481,6 +518,7 @@ export function getAggregatedFactTableRestateReason({
   registry,
   factTableSettingsHash,
   metricState,
+  now,
 }: {
   registry: Pick<
     AggregatedFactTableInterface,
@@ -488,13 +526,18 @@ export function getAggregatedFactTableRestateReason({
     | "factTableSettingsHash"
     | "metricState"
     | "inFlightExecutionId"
+    | "lastMaxTimestamp"
   >;
   factTableSettingsHash: string;
   metricState: AggregatedFactTableMetricStateInterface[];
+  now: Date;
 }): AggregatedFactTableRestateReason {
   if (!registry.tableFullName) return null;
   if ((registry.inFlightExecutionId ?? null) !== null) {
     return "incomplete-write";
+  }
+  if (isWatermarkInFuture(registry.lastMaxTimestamp, now)) {
+    return "watermark-in-future";
   }
   if (
     detectAggregatedFactTableSchemaDrift({

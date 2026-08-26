@@ -10,6 +10,7 @@ import {
   assertIncrementalRefreshPrerequisites,
   getFactTablesNeedingRebuild,
   exploratoryOverallRequiresFullRefresh,
+  isWatermarkInFuture,
   legacyDocDescribesPhase,
 } from "back-end/src/enterprise/services/data-pipeline";
 import { planMetricFanOut } from "back-end/src/services/experimentQueries/planMetricFanOut";
@@ -206,19 +207,48 @@ describe("assertIncrementalRefreshPrerequisites experimentSettingsHash", () => {
 type ExistingMetricSource =
   IncrementalRefreshInterface["metricSources"][number];
 
+const NOW = new Date("2024-06-01T00:00:00Z");
+
 function makeMetricSource(
   groupId: string,
   factTableId: string,
   metrics: { id: string; settingsHash: string }[],
+  maxTimestamp: Date | null = null,
 ): ExistingMetricSource {
   return {
     groupId,
     factTableId,
     metrics,
-    maxTimestamp: null,
+    maxTimestamp,
     tableFullName: `proj.ds.${groupId}`,
   };
 }
+
+describe("isWatermarkInFuture", () => {
+  it("is false for a missing watermark or one at/before now", () => {
+    expect(isWatermarkInFuture(null, NOW)).toBe(false);
+    expect(isWatermarkInFuture(undefined, NOW)).toBe(false);
+    expect(isWatermarkInFuture(NOW, NOW)).toBe(false);
+    expect(isWatermarkInFuture(new Date("2024-05-31T23:00:00Z"), NOW)).toBe(
+      false,
+    );
+  });
+
+  it("tolerates a few minutes of app-server clock jitter", () => {
+    expect(isWatermarkInFuture(new Date("2024-06-01T00:02:00Z"), NOW)).toBe(
+      false,
+    );
+  });
+
+  it("is true for a watermark clearly ahead of now", () => {
+    expect(isWatermarkInFuture(new Date("2024-06-01T01:00:00Z"), NOW)).toBe(
+      true,
+    );
+    expect(isWatermarkInFuture(new Date("9980-04-14T17:24:42Z"), NOW)).toBe(
+      true,
+    );
+  });
+});
 
 describe("getFactTablesNeedingRebuild", () => {
   const sameFtMetric = factMetricFactory.build({
@@ -243,6 +273,7 @@ describe("getFactTablesNeedingRebuild", () => {
       existingMetricSources: [],
       desiredFanOut: planMetricFanOut([sameFtMetric]),
       currentMetricSettingsHashes: new Map([["m_same_ft", "h1"]]),
+      now: NOW,
     });
     expect(rebuild.size).toBe(0);
   });
@@ -256,6 +287,7 @@ describe("getFactTablesNeedingRebuild", () => {
       ],
       desiredFanOut: planMetricFanOut([sameFtMetric]),
       currentMetricSettingsHashes: new Map([["m_same_ft", "h1"]]),
+      now: NOW,
     });
     expect(rebuild.size).toBe(0);
   });
@@ -269,6 +301,7 @@ describe("getFactTablesNeedingRebuild", () => {
       ],
       desiredFanOut: planMetricFanOut([sameFtMetric]),
       currentMetricSettingsHashes: new Map(),
+      now: NOW,
     });
     expect([...rebuild]).toEqual(["ft_a"]);
   });
@@ -282,6 +315,7 @@ describe("getFactTablesNeedingRebuild", () => {
       ],
       desiredFanOut: planMetricFanOut([sameFtMetric]),
       currentMetricSettingsHashes: new Map([["m_same_ft", "new"]]),
+      now: NOW,
     });
     expect([...rebuild]).toEqual(["ft_a"]);
   });
@@ -301,6 +335,7 @@ describe("getFactTablesNeedingRebuild", () => {
         ["m_same_ft", "h1"],
         ["m_other_ft", "new"],
       ]),
+      now: NOW,
     });
     expect([...rebuild]).toEqual(["ft_b"]);
   });
@@ -324,6 +359,33 @@ describe("getFactTablesNeedingRebuild", () => {
         ["m_same_ft", "h1"],
         ["m_added", "h2"],
       ]),
+      now: NOW,
+    });
+    expect([...rebuild]).toEqual(["ft_a"]);
+  });
+
+  it("flags a fact table whose stored watermark is in the future even if nothing else changed", () => {
+    const rebuild = getFactTablesNeedingRebuild({
+      existingMetricSources: [
+        makeMetricSource(
+          "grp_a",
+          "ft_a",
+          [{ id: "m_same_ft", settingsHash: "h1" }],
+          new Date("2024-06-04T00:00:00Z"),
+        ),
+        makeMetricSource(
+          "grp_b",
+          "ft_b",
+          [{ id: "m_other_ft", settingsHash: "h2" }],
+          new Date("2024-05-31T00:00:00Z"),
+        ),
+      ],
+      desiredFanOut: planMetricFanOut([sameFtMetric, otherFtMetric]),
+      currentMetricSettingsHashes: new Map([
+        ["m_same_ft", "h1"],
+        ["m_other_ft", "h2"],
+      ]),
+      now: NOW,
     });
     expect([...rebuild]).toEqual(["ft_a"]);
   });
@@ -338,6 +400,7 @@ describe("getFactTablesNeedingRebuild", () => {
       ],
       desiredFanOut: planMetricFanOut([sameFtMetric]),
       currentMetricSettingsHashes: new Map([["m_same_ft", "h1"]]),
+      now: NOW,
     });
     expect([...rebuild]).toEqual(["ft_a"]);
   });
@@ -354,6 +417,7 @@ describe("getFactTablesNeedingRebuild", () => {
       ],
       desiredFanOut: planMetricFanOut([crossFtMetric]),
       currentMetricSettingsHashes: new Map([["m_cross_ft", "new"]]),
+      now: NOW,
     });
     expect([...rebuild].sort()).toEqual(["ft_denom", "ft_num"]);
   });
@@ -367,6 +431,7 @@ describe("getFactTablesNeedingRebuild", () => {
       ],
       desiredFanOut: planMetricFanOut([crossFtMetric]),
       currentMetricSettingsHashes: new Map([["m_cross_ft", "h1"]]),
+      now: NOW,
     });
     expect([...rebuild]).toEqual(["ft_denom"]);
   });
@@ -395,6 +460,7 @@ describe("getFactTablesNeedingRebuild", () => {
         ["m_same_on_num", "h_same"],
         ["m_cross_ft", "h_cross"],
       ]),
+      now: NOW,
     });
     expect([...rebuild].sort()).toEqual(["ft_denom", "ft_num"]);
   });

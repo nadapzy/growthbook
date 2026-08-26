@@ -968,6 +968,7 @@ describe("snapshot planning", () => {
         ],
         desiredFanOut: planMetricFanOut([metric]),
         currentMetricSettingsHashes: new Map([["m1", plannedCurrentHash]]),
+        now: new Date(),
       }),
     ).toEqual(new Set(["ft_a"]));
   });

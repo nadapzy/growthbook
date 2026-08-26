@@ -42,6 +42,7 @@ type AggregatedFactTableMaterializationStatus =
 type AggregatedFactTableRestateReason =
   | "schema-drift"
   | "incomplete-write"
+  | "watermark-in-future"
   | null;
 
 type AggregatedFactTableStatus = {
@@ -65,6 +66,8 @@ const pendingRestateCopy: Record<
     "Metric or fact table configuration changed since this table was built. A full restate will run on the next scheduled update.",
   "incomplete-write":
     "A previous run did not finish cleanly. The next scheduled update will rebuild this table to avoid double-counting.",
+  "watermark-in-future":
+    "A source row with a future-dated timestamp froze incremental updates for this table. The next scheduled update will rebuild it.",
 };
 
 const materializationStatusDisplay: Record<

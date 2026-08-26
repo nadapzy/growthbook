@@ -375,6 +375,7 @@ const startExperimentIncrementalRefreshQueries = async (
     existingMetricSources: incrementalRefreshModel?.metricSources ?? [],
     desiredFanOut,
     currentMetricSettingsHashes,
+    now: params.incrementalRefreshStartTime,
   });
 
   // Begin Queries
@@ -689,6 +690,7 @@ const startExperimentIncrementalRefreshQueries = async (
       unitsSourceTableFullName: unitsTableFullName,
       metrics: group.metrics,
       lastMaxTimestamp: existingSource?.maxTimestamp || null,
+      incrementalRefreshStartTime: params.incrementalRefreshStartTime,
     };
 
     const insertMetricsSourceDataQuery = await startQuery({

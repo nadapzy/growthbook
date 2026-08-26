@@ -363,6 +363,11 @@ export interface CreateExperimentIncrementalUnitsQueryParams {
 export interface UpdateExperimentIncrementalUnitsQueryParams
   extends CreateExperimentIncrementalUnitsQueryParams {
   segment: SegmentInterface | null;
+  // App-server wall-clock time this refresh started; the upper bound of every
+  // incremental scan. The pipeline persists MAX(timestamp) of the rows it just
+  // scanned as the next run's exclusive lower bound, so without this cap one
+  // future-dated source row (client clock skew) pushes that watermark past
+  // "now" and every later run silently skips the real rows stamped before it.
   incrementalRefreshStartTime: Date;
   lastMaxTimestamp: Date | null;
   unitsTempTableFullName: string;
@@ -415,6 +420,8 @@ export interface InsertMetricSourceDataQueryParams {
   unitsSourceTableFullName: string;
   metrics: FactMetricInterface[];
   lastMaxTimestamp: Date | null;
+  // See UpdateExperimentIncrementalUnitsQueryParams.incrementalRefreshStartTime.
+  incrementalRefreshStartTime: Date;
 }
 
 export interface DropMetricSourceCovariateTableQueryParams {
@@ -493,10 +500,11 @@ export interface InsertAggregatedFactTableDataQueryParams {
   // exclusiveStart=true; restate uses the chunk start with exclusiveStart=false.
   windowStartDate: Date;
   exclusiveStart: boolean;
-  // Exclusive upper bound on event timestamp. Set for all but the last chunk
-  // of a chunked restate so chunks tile [windowStart, now) half-open; null for
-  // incremental, the final restate chunk, and unchunked restates (open to "now").
-  windowEndDate: Date | null;
+  // Exclusive upper bound on event timestamp. Chunked restates tile
+  // [windowStart, now) half-open; every other run ends at the run's start time
+  // for the same reason as
+  // UpdateExperimentIncrementalUnitsQueryParams.incrementalRefreshStartTime.
+  windowEndDate: Date;
 }
 
 export interface AggregatedFactTableMaxTimestampQueryParams {
